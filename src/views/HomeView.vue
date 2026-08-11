@@ -123,7 +123,9 @@ export default {
                 const file = files[i]
                 const reader = new FileReader()
                 if (!file) continue
-                const fileType = file.type || 'application/octet-stream'
+                const rawType = file.type || 'application/octet-stream'
+                // 后端只接受 image / video / audio / text，从 MIME 中提取主类别
+                const fileType = rawType.split('/')[0] || 'text'
                 reader.onload = (event) => {
                     const content = event.target?.result as string
                     const timestamp = '' as string
@@ -183,7 +185,7 @@ export default {
 
             this.is_loading = true
             try {
-                const res = await axios.post('http://127.0.0.1:8000/api/v1/pipeline', payload)
+                const res = await axios.post('/api/v1/pipeline', payload)
                 this.case_result = res.data
             } catch (err) {
                 console.error('请求失败:', err)
