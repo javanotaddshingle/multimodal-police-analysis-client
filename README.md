@@ -6,7 +6,7 @@
 
 # 快速启动
 
-```pow
+```powershell
 npm run dev
 ```
 
