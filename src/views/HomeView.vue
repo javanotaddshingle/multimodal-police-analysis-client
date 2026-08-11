@@ -59,7 +59,7 @@ export default {
             base64Data: '' as string,
             case_id: '' as string,
             temp_text: '' as string,
-            selectedFile: [] as Array<{ type: string; content: string }>,
+            selectedFile: [] as Array<{ type: string; content: string; timestamp: string; file_name: string; file_path: string }>,
             case_result: {} as any,
         }
     },
@@ -108,10 +108,15 @@ export default {
                 const fileType = file.type || 'application/octet-stream'
                 reader.onload = (event) => {
                     const content = event.target?.result as string
+                    const timestamp = '' as string
+                    
                     // 加入文件的类型和base64编码
                     this.selectedFile.push({
                         type: fileType,
-                        content: content
+                        content: content,
+                        timestamp: '',
+                        file_name: '',
+                        file_path: '',
                     })
                     console.log(`已读取: ${fileType}, 长度: ${content.length}`)
                 }
@@ -120,10 +125,16 @@ export default {
             }
         },
         submit_text() {
-            if (this.temp_text === '') alert('请输入文本')
+            if (this.temp_text === '') {
+                alert('请输入文本')
+                return
+            }
             this.selectedFile.push({
                 type: 'text',
-                content: this.temp_text
+                content: this.temp_text,
+                timestamp: '',
+                file_name: '',
+                file_path: '',
             })
             this.temp_text = ''
         },
@@ -145,32 +156,20 @@ export default {
 
             const payload = {
                 case_id: this.case_id,
-                inputs: this.selectedFile
+                inputs: this.selectedFile,
             }
+            console.log('======================')
             console.log(payload)
+            console.log('======================')
 
             try {
-                const res = await axios.post('http://127.0.0.1:8000/test', payload)
+                const res = await axios.post('http://127.0.0.1:8000/api/v1/pipeline', payload)
                 console.log('succ', res.data)
                 this.case_result = res.data
             } catch (err) {
                 console.log('fail', err)
             }
         }
-
-        // base64Encode() {
-        //   const reader = new FileReader()
-        //   // 这里的event是浏览器读完文件后产生的
-        //   reader.onload = (event) => {
-        //     this.base64Data = event.target?.result as string
-        //     console.log('base64Data:', this.base64Data)
-        //   }
-        //   if(!this.selectedFile) {
-        //     alert('请先选择文件')
-        //     return
-        //   }
-        //   reader.readAsDataURL(this.selectedFile)
-        // }
     },
     mounted() {
         window.addEventListener('beforeunload', this.handleBeforeUnload);
@@ -229,6 +228,10 @@ export default {
             <div style="flex:1"></div>
         </div>
     </div>
+
+    <!-- 2. 一个默认隐藏的"加载中"文字 -->
+    <p id="loadingText" style="display: none; color: red;">加载中，请稍候...</p>
+
     <div class="result-container">
         <!-- 核心前提：只有当 case_result 拿到真实数据时才渲染 -->
         <div v-if="Object.keys(case_result).length > 0" class="data-card">
