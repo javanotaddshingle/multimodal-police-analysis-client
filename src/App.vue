@@ -91,5 +91,7 @@ export default {
   flex: 1;
   height: 100vh; 
   padding: 10px;
+  overflow-y: auto;
 }
+
 </style>
