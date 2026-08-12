@@ -53,451 +53,456 @@ import { ref } from 'vue'
 import axios from 'axios';
 
 export default {
-    data() {
-        return {
-            file_Info: null,
-            base64Data: '' as string,
-            case_id: '' as string,
-            temp_text: '' as string,
-            selectedFile: [] as Array<{ type: string; content: string; timestamp: string; file_name: string; file_path: string }>,
-            case_result: {} as any,
-            is_loading: false as boolean,
+  data() {
+    return {
+      file_Info: null,
+      base64Data: '' as string,
+      case_id: '' as string,
+      temp_text: '' as string,
+      selectedFile: [] as Array<{ type: string; content: string; timestamp: string; file_name: string; file_path: string }>,
+      case_result: {} as any,
+      is_loading: false as boolean,
+    }
+  },
+
+  methods: {
+    handleBeforeUnload(event: Event) {
+      if (this.selectedFile.length > 0 || this.temp_text.length > 0 || this.case_id.length > 0) {
+        event.preventDefault();
+      }
+    },
+    getFileCategory(type: string): string {
+      if (!type) return '未知'
+      return type.split('/')[0] || '未知'
+    },
+    // 获取文件类型的显示标签
+    getFileTypeLabel(type: string): string {
+      const category: string = this.getFileCategory(type)
+      const map: Record<string, string> = {
+        'image': '图片',
+        'video': '视频',
+        'audio': '音频',
+        'text': '文本',
+        'application': '文件',
+      }
+      return map[category] || '文件'
+    },
+    // 获取文件类型的图标颜色
+    getFileTypeColor(type: string): string {
+      const category: string = this.getFileCategory(type)
+      const map: Record<string, string> = {
+        'image': '#3b82f6',
+        'video': '#8b5cf6',
+        'audio': '#f59e0b',
+        'text': '#10b981',
+        'application': '#6b7280',
+      }
+      return map[category] || '#6b7280'
+    },
+    isValidCaseId(caseId: string): boolean {
+      const trimmed = caseId.trim();
+      if (trimmed === "." || trimmed === "..") {
+        return false;
+      }
+      const pattern = /^[a-zA-Z0-9一-鿿\-:()\[\]{}\_.]+$/;
+      return pattern.test(trimmed);
+    },
+    getBase64(ms: string) {
+      return Base64.encode(ms)
+    },
+    getOriginalContent(ms: string) {
+      return Base64.decode(ms)
+    },
+
+    handleFileChange(event: Event) {
+      const input = event.target as HTMLInputElement
+      const files = input.files
+      if (!files || files.length == 0) return
+
+      for (var i = 0; i < files.length; i++) {
+        const file = files[i]
+        const reader = new FileReader()
+        if (!file) continue
+        const rawType = file.type || 'application/octet-stream'
+        // 后端只接受 image / video / audio / text，从 MIME 中提取主类别
+        const fileType = rawType.split('/')[0] || 'text'
+        reader.onload = (event) => {
+          const content = event.target?.result as string
+          const timestamp = '' as string
+
+          this.selectedFile.push({
+            type: fileType,
+            content: content,
+            timestamp: '',
+            file_name: file.name || '',
+            file_path: '',
+          })
+          console.log(fileType)
+          console.log(content.substring(0, 50))
         }
+        reader.readAsDataURL(file)
+      }
+      // 重置 input 以允许重复选择同一文件
+      input.value = ''
     },
+    submit_text() {
+      if (this.temp_text.trim() === '') {
+        alert('请输入文本内容')
+        return
+      }
+      this.selectedFile.push({
+        type: 'text',
+        content: this.temp_text,
+        timestamp: '',
+        file_name: '',
+        file_path: '',
+      })
+      this.temp_text = ''
+    },
+    deleteSubmitItem(index: number) {
+      this.selectedFile.splice(index, 1)
+    },
+    // 返回提交页面
+    backToSubmit() {
+      this.case_result = {}
+    },
+    async submit() {
+      if (this.case_id === '') {
+        alert('请填写案件名称!')
+        return
+      }
+      if (this.selectedFile.length === 0) {
+        alert('请至少提交一条信息!')
+        return
+      }
+      if (!this.isValidCaseId(this.case_id)) {
+        alert('案件名称不合法，请重新填写!')
+        return
+      }
 
-    methods: {
-        handleBeforeUnload(event: Event) {
-            if (this.selectedFile.length > 0 || this.temp_text.length > 0 || this.case_id.length > 0) {
-                event.preventDefault();
-            }
-        },
-        getFileCategory(type: string): string {
-            if (!type) return '未知'
-            return type.split('/')[0] || '未知'
-        },
-        // 获取文件类型的显示标签
-        getFileTypeLabel(type: string): string {
-            const category: string = this.getFileCategory(type)
-            const map: Record<string, string> = {
-                'image': '图片',
-                'video': '视频',
-                'audio': '音频',
-                'text': '文本',
-                'application': '文件',
-            }
-            return map[category] || '文件'
-        },
-        // 获取文件类型的图标颜色
-        getFileTypeColor(type: string): string {
-            const category: string = this.getFileCategory(type)
-            const map: Record<string, string> = {
-                'image': '#3b82f6',
-                'video': '#8b5cf6',
-                'audio': '#f59e0b',
-                'text': '#10b981',
-                'application': '#6b7280',
-            }
-            return map[category] || '#6b7280'
-        },
-        isValidCaseId(caseId: string): boolean {
-            const trimmed = caseId.trim();
-            if (trimmed === "." || trimmed === "..") {
-                return false;
-            }
-            const pattern = /^[a-zA-Z0-9一-鿿\-:()\[\]{}\_.]+$/;
-            return pattern.test(trimmed);
-        },
-        getBase64(ms: string) {
-            return Base64.encode(ms)
-        },
-        getOriginalContent(ms: string) {
-            return Base64.decode(ms)
-        },
+      const payload = {
+        case_id: this.case_id,
+        inputs: this.selectedFile,
+      }
 
-        handleFileChange(event: Event) {
-            const input = event.target as HTMLInputElement
-            const files = input.files
-            if (!files || files.length == 0) return
+      this.is_loading = true
+      try {
+        const res = await axios.post('/api/v1/pipeline', payload)
+        this.case_result = res.data
+      } catch (err: any) {
+        console.error('请求失败:', err)
 
-            for (var i = 0; i < files.length; i++) {
-                const file = files[i]
-                const reader = new FileReader()
-                if (!file) continue
-                const rawType = file.type || 'application/octet-stream'
-                // 后端只接受 image / video / audio / text，从 MIME 中提取主类别
-                const fileType = rawType.split('/')[0] || 'text'
-                reader.onload = (event) => {
-                    const content = event.target?.result as string
-                    const timestamp = '' as string
-
-                    this.selectedFile.push({
-                        type: fileType,
-                        content: content,
-                        timestamp: '',
-                        file_name: file.name || '',
-                        file_path: '',
-                    })
-                }
-                reader.readAsDataURL(file)
-            }
-            // 重置 input 以允许重复选择同一文件
-            input.value = ''
-        },
-        submit_text() {
-            if (this.temp_text.trim() === '') {
-                alert('请输入文本内容')
-                return
-            }
-            this.selectedFile.push({
-                type: 'text',
-                content: this.temp_text,
-                timestamp: '',
-                file_name: '',
-                file_path: '',
-            })
-            this.temp_text = ''
-        },
-        deleteSubmitItem(index: number) {
-            this.selectedFile.splice(index, 1)
-        },
-        // 返回提交页面
-        backToSubmit() {
-            this.case_result = {}
-        },
-        async submit() {
-            if (this.case_id === '') {
-                alert('请填写案件名称!')
-                return
-            }
-            if (this.selectedFile.length === 0) {
-                alert('请至少提交一条信息!')
-                return
-            }
-            if (!this.isValidCaseId(this.case_id)) {
-                alert('案件名称不合法，请重新填写!')
-                return
-            }
-
-            const payload = {
-                case_id: this.case_id,
-                inputs: this.selectedFile,
-            }
-
-            this.is_loading = true
-            try {
-                const res = await axios.post('/api/v1/pipeline', payload)
-                this.case_result = res.data
-            } catch (err) {
-                console.error('请求失败:', err)
-                alert('请求失败，请检查后端服务是否启动')
-            } finally {
-                this.is_loading = false
-            }
-        },
-        // 格式化毫秒为可读时间
-        formatMs(ms: number): string {
-            if (ms < 1000) return ms + 'ms'
-            return (ms / 1000).toFixed(2) + 's'
-        },
-        // 获取置信度对应的颜色
-        getConfidenceColor(score: number): string {
-            if (score >= 0.8) return '#ef4444'
-            if (score >= 0.6) return '#f59e0b'
-            return '#10b981'
-        },
-        // 获取预警级别对应的样式
-        getAlertLevelClass(level: string): string {
-            const map: Record<string, string> = {
-                'high': 'alert-level--high',
-                'medium': 'alert-level--medium',
-                'low': 'alert-level--low',
-            }
-            return map[level] || 'alert-level--low'
+        // 1. 如果连不上后端（网络断开或服务没启）
+        if (err.code === 'ERR_NETWORK' || !err.response) {
+          alert('请求失败，请检查后端服务是否启动')
+          return
         }
+
+        // 2. 如果后端返回了错误状态码（400、500等）
+        const status = err.response.status
+        const detail = err.response.data?.detail
+
+        if (status === 400) {
+          // 参数校验失败，把后端的详细错误信息展示出来
+          if (Array.isArray(detail)) {
+            const msg = detail.map(d => `${d.loc.join('.')}: ${d.msg}`).join('\n')
+            alert(`请求参数错误：\n${msg}`)
+          } else {
+            alert(`请求参数错误：${detail || '请检查输入数据格式'}`)
+          }
+        } else if (status === 500) {
+          alert(`服务器内部错误：${detail || '未知异常'}`)
+        } else {
+          alert(`请求失败（${status}）：${detail || '未知错误'}`)
+        }
+      } finally {
+        this.is_loading = false
+      }
     },
-    mounted() {
-        window.addEventListener('beforeunload', this.handleBeforeUnload);
+    // 格式化毫秒为可读时间
+    formatMs(ms: number): string {
+      if (ms < 1000) return ms + 'ms'
+      return (ms / 1000).toFixed(2) + 's'
     },
-    beforeUnmount() {
-        window.removeEventListener('beforeunload', this.handleBeforeUnload);
+    // 获取置信度对应的颜色
+    getConfidenceColor(score: number): string {
+      if (score >= 0.8) return '#ef4444'
+      if (score >= 0.6) return '#f59e0b'
+      return '#10b981'
     },
+    // 获取预警级别对应的样式
+    getAlertLevelClass(level: string): string {
+      const map: Record<string, string> = {
+        'high': 'alert-level--high',
+        'medium': 'alert-level--medium',
+        'low': 'alert-level--low',
+      }
+      return map[level] || 'alert-level--low'
+    }
+  },
+  mounted() {
+    window.addEventListener('beforeunload', this.handleBeforeUnload);
+  },
+  beforeUnmount() {
+    window.removeEventListener('beforeunload', this.handleBeforeUnload);
+  },
 
 }
 </script>
 
 <template>
-    <!-- ========== 加载状态 ========== -->
-    <div v-if="is_loading" class="loading-overlay">
-        <div class="loading-card">
-            <div class="loading-spinner"></div>
-            <p class="loading-text">正在分析研判中，请稍候...</p>
-            <p class="loading-hint">系统正在对提交的多模态数据进行深度分析</p>
-        </div>
+  <!-- ========== 加载状态 ========== -->
+  <div v-if="is_loading" class="loading-overlay">
+    <div class="loading-card">
+      <div class="loading-spinner"></div>
+      <p class="loading-text">正在分析研判中，请稍候...</p>
+      <p class="loading-hint">系统正在对提交的多模态数据进行深度分析</p>
+    </div>
+  </div>
+
+  <!-- ========== 提交页面 ========== -->
+  <div class="page-container" v-if="Object.keys(case_result).length === 0 && !is_loading">
+    <div class="page-header">
+      <h1 class="page-title">多模态案件分析</h1>
+      <p class="page-desc">上传图片、视频、音频或文本材料，系统将自动进行深度伪造检测与诈骗研判</p>
     </div>
 
-    <!-- ========== 提交页面 ========== -->
-    <div class="page-container" v-if="Object.keys(case_result).length === 0 && !is_loading">
-        <div class="page-header">
-            <h1 class="page-title">多模态案件分析</h1>
-            <p class="page-desc">上传图片、视频、音频或文本材料，系统将自动进行深度伪造检测与诈骗研判</p>
+    <div class="form-card">
+      <!-- 案件名称 -->
+      <div class="form-section">
+        <label class="form-label">
+          案件名称
+          <span class="required-mark">*</span>
+        </label>
+        <input type="text" v-model="case_id" class="form-input" placeholder="请输入案件编号或名称，例如：ZA-2024-001" />
+        <p class="form-hint error" v-if="case_id !== '' && !isValidCaseId(case_id)">
+          案件名称包含不合法字符，仅支持字母、数字、中文及 -:()[]{}_.
+        </p>
+      </div>
+
+      <!-- 文件上传 -->
+      <div class="form-section">
+        <label class="form-label">
+          上传证据材料
+          <span class="required-mark">*</span>
+        </label>
+        <p class="form-hint">支持图片、视频、音频及 .txt 文本文件，可多选</p>
+        <label class="upload-trigger" for="file-upload">
+          <svg class="upload-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+            <polyline points="17 8 12 3 7 8" />
+            <line x1="12" y1="3" x2="12" y2="15" />
+          </svg>
+          <span>点击选择文件</span>
+        </label>
+        <input id="file-upload" type="file" accept="image/*,video/*,audio/*,.txt" @change="handleFileChange"
+          class="file-input-hidden" multiple />
+      </div>
+
+      <!-- 文本输入 -->
+      <div class="form-section">
+        <label class="form-label">文本信息录入</label>
+        <p class="form-hint">可手动输入或粘贴涉案聊天记录、短信、邮件等文本信息</p>
+        <div class="text-input-row">
+          <textarea v-model="temp_text" class="form-textarea" placeholder="请输入涉案文本信息，例如：聊天记录、转账留言、短信内容等..."></textarea>
+          <button @click="submit_text" class="btn btn-secondary" :disabled="temp_text.trim() === ''">
+            添加文本
+          </button>
         </div>
+      </div>
 
-        <div class="form-card">
-            <!-- 案件名称 -->
-            <div class="form-section">
-                <label class="form-label">
-                    案件名称
-                    <span class="required-mark">*</span>
-                </label>
-                <input
-                    type="text"
-                    v-model="case_id"
-                    class="form-input"
-                    placeholder="请输入案件编号或名称，例如：ZA-2024-001"
-                />
-                <p class="form-hint error" v-if="case_id !== '' && !isValidCaseId(case_id)">
-                    案件名称包含不合法字符，仅支持字母、数字、中文及 -:()[]{}_.
-                </p>
-            </div>
-
-            <!-- 文件上传 -->
-            <div class="form-section">
-                <label class="form-label">
-                    上传证据材料
-                    <span class="required-mark">*</span>
-                </label>
-                <p class="form-hint">支持图片、视频、音频及 .txt 文本文件，可多选</p>
-                <label class="upload-trigger" for="file-upload">
-                    <svg class="upload-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
-                        <polyline points="17 8 12 3 7 8"/>
-                        <line x1="12" y1="3" x2="12" y2="15"/>
-                    </svg>
-                    <span>点击选择文件</span>
-                </label>
-                <input
-                    id="file-upload"
-                    type="file"
-                    accept="image/*,video/*,audio/*,.txt"
-                    @change="handleFileChange"
-                    class="file-input-hidden"
-                    multiple
-                />
-            </div>
-
-            <!-- 文本输入 -->
-            <div class="form-section">
-                <label class="form-label">文本信息录入</label>
-                <p class="form-hint">可手动输入或粘贴涉案聊天记录、短信、邮件等文本信息</p>
-                <div class="text-input-row">
-                    <textarea
-                        v-model="temp_text"
-                        class="form-textarea"
-                        placeholder="请输入涉案文本信息，例如：聊天记录、转账留言、短信内容等..."
-                    ></textarea>
-                    <button @click="submit_text" class="btn btn-secondary" :disabled="temp_text.trim() === ''">
-                        添加文本
-                    </button>
-                </div>
-            </div>
-
-            <!-- 已选文件列表 -->
-            <div class="form-section" v-if="selectedFile.length > 0">
-                <label class="form-label">
-                    已选材料列表
-                    <span class="file-count">(共 {{ selectedFile.length }} 条)</span>
-                </label>
-                <div class="file-list">
-                    <div class="file-item" v-for="(item, index) in selectedFile" :key="index">
-                        <span
-                            class="file-type-badge"
-                            :style="{ background: getFileTypeColor(item.type) }"
-                        >
-                            {{ getFileTypeLabel(item.type) }}
-                        </span>
-                        <span class="file-preview-text">
-                            {{ item.file_name || item.content.substring(0, 60) + '...' }}
-                        </span>
-                        <button @click="deleteSubmitItem(index)" class="btn-delete" title="删除此项">
-                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                <line x1="18" y1="6" x2="6" y2="18"/>
-                                <line x1="6" y1="6" x2="18" y2="18"/>
-                            </svg>
-                        </button>
-                    </div>
-                </div>
-            </div>
-
-            <!-- 提交按钮 -->
-            <div class="form-actions">
-                <button @click="submit" class="btn btn-primary">
-                    上传并分析
-                </button>
-            </div>
-        </div>
-    </div>
-
-    <!-- ========== 结果展示页面 ========== -->
-    <div class="page-container" v-if="Object.keys(case_result).length > 0 && !is_loading">
-        <!-- 顶部栏 -->
-        <div class="result-topbar">
-            <button @click="backToSubmit" class="btn btn-back">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="back-icon">
-                    <line x1="19" y1="12" x2="5" y2="12"/>
-                    <polyline points="12 19 5 12 12 5"/>
-                </svg>
-                返回提交
+      <!-- 已选文件列表 -->
+      <div class="form-section" v-if="selectedFile.length > 0">
+        <label class="form-label">
+          已选材料列表
+          <span class="file-count">(共 {{ selectedFile.length }} 条)</span>
+        </label>
+        <div class="file-list">
+          <div class="file-item" v-for="(item, index) in selectedFile" :key="index">
+            <span class="file-type-badge" :style="{ background: getFileTypeColor(item.type) }">
+              {{ getFileTypeLabel(item.type) }}
+            </span>
+            <span class="file-preview-text">
+              {{ item.file_name || item.content.substring(0, 60) + '...' }}
+            </span>
+            <button @click="deleteSubmitItem(index)" class="btn-delete" title="删除此项">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <line x1="18" y1="6" x2="6" y2="18" />
+                <line x1="6" y1="6" x2="18" y2="18" />
+              </svg>
             </button>
-            <h2 class="result-title">案件分析报告</h2>
-            <div></div>
+          </div>
         </div>
+      </div>
 
-        <div class="result-content">
-            <!-- 1. 案件基础信息卡片 -->
-            <div class="info-card">
-                <div class="info-card-header">
-                    <h3>案件基础信息</h3>
-                </div>
-                <div class="info-card-body">
-                    <div class="info-row">
-                        <span class="info-label">案件编号</span>
-                        <span class="info-value mono">{{ case_result.case_id }}</span>
-                    </div>
-                    <div class="info-row">
-                        <span class="info-label">处理耗时</span>
-                        <span class="info-value">{{ formatMs(case_result.elapsed_ms) }}</span>
-                    </div>
-                    <div class="info-row">
-                        <span class="info-label">深度伪造检测</span>
-                        <span class="info-value">
-                            <span :class="case_result.deepfake_detected ? 'badge badge-danger' : 'badge badge-success'">
-                                {{ case_result.deepfake_detected ? '已检测到深伪' : '未检测到深伪' }}
-                            </span>
-                        </span>
-                    </div>
-                </div>
-            </div>
-
-            <!-- 2. 安全预警卡片 -->
-            <div class="info-card" v-if="case_result.alerts && case_result.alerts.length > 0">
-                <div class="info-card-header info-card-header--warning">
-                    <h3>安全预警</h3>
-                    <span class="card-count">{{ case_result.alerts.length }} 条预警</span>
-                </div>
-                <div class="info-card-body">
-                    <div v-for="(alert, index) in case_result.alerts" :key="index"
-                        class="alert-item"
-                        :class="getAlertLevelClass(alert.level)">
-                        <div class="alert-item-header">
-                            <span class="alert-title">{{ alert.title }}</span>
-                            <span class="alert-level-tag" :class="getAlertLevelClass(alert.level)">
-                                {{ alert.level === 'high' ? '高危' : alert.level === 'medium' ? '中危' : '低危' }}
-                            </span>
-                        </div>
-                        <p class="alert-reason">{{ alert.reason }}</p>
-                        <p class="alert-warning">{{ alert.warning }}</p>
-                    </div>
-                </div>
-            </div>
-
-            <!-- 3. 智能研判卡片 -->
-            <div class="info-card" v-if="case_result.judgment">
-                <div class="info-card-header info-card-header--primary">
-                    <h3>智能研判分析</h3>
-                </div>
-                <div class="info-card-body">
-                    <div class="judgment-verdict"
-                        :class="case_result.judgment.is_fraud ? 'verdict-fraud' : 'verdict-safe'">
-                        <span class="verdict-text">
-                            {{ case_result.judgment.is_fraud ? '涉嫌诈骗' : '暂未发现诈骗' }}
-                        </span>
-                        <span class="verdict-confidence">
-                            置信度 {{ case_result.judgment.confidence_score }}
-                        </span>
-                    </div>
-
-                    <div class="info-row">
-                        <span class="info-label">诈骗类型</span>
-                        <span class="info-value">{{ case_result.judgment.fraud_type || '未识别' }}</span>
-                    </div>
-                    <div class="info-row">
-                        <span class="info-label">研判可信度</span>
-                        <span class="info-value">{{ case_result.judgment.confidence }}</span>
-                    </div>
-                    <div class="info-row">
-                        <span class="info-label">分析理由</span>
-                        <span class="info-value">{{ case_result.judgment.reason }}</span>
-                    </div>
-
-                    <div class="warning-block" v-if="case_result.judgment.warning">
-                        <span class="warning-block-label">防骗提醒</span>
-                        <p>{{ case_result.judgment.warning }}</p>
-                    </div>
-
-                    <!-- 相似案例 -->
-                    <div class="sub-section"
-                        v-if="case_result.judgment.similar_cases && case_result.judgment.similar_cases.length > 0">
-                        <h4 class="sub-section-title">相似历史案例参考</h4>
-                        <div class="similar-cases-grid">
-                            <div v-for="(caseItem, idx) in case_result.judgment.similar_cases" :key="idx" class="similar-case-card">
-                                <div class="similar-case-top">
-                                    <span class="similar-case-type">{{ caseItem.fraud_type }}</span>
-                                    <span class="similar-case-score">匹配度 {{ caseItem.score }}</span>
-                                </div>
-                                <p class="similar-case-content">{{ caseItem.content }}</p>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            </div>
-
-            <!-- 4. 处理耗时卡片 -->
-            <div class="info-card" v-if="case_result.stages">
-                <div class="info-card-header">
-                    <h3>处理耗时明细</h3>
-                </div>
-                <div class="info-card-body">
-                    <div class="timeline">
-                        <div class="timeline-item">
-                            <div class="timeline-dot"></div>
-                            <div class="timeline-content">
-                                <span class="timeline-label">多模态分析</span>
-                                <span class="timeline-value">{{ formatMs(case_result.stages.multimodal_ms) }}</span>
-                            </div>
-                        </div>
-                        <div class="timeline-item">
-                            <div class="timeline-dot"></div>
-                            <div class="timeline-content">
-                                <span class="timeline-label">特征提取</span>
-                                <span class="timeline-value">{{ formatMs(case_result.stages.extraction_ms) }}</span>
-                            </div>
-                        </div>
-                        <div class="timeline-item">
-                            <div class="timeline-dot"></div>
-                            <div class="timeline-content">
-                                <span class="timeline-label">数据存储</span>
-                                <span class="timeline-value">{{ formatMs(case_result.stages.storage_ms) }}</span>
-                            </div>
-                        </div>
-                        <div class="timeline-item">
-                            <div class="timeline-dot"></div>
-                            <div class="timeline-content">
-                                <span class="timeline-label">智能研判</span>
-                                <span class="timeline-value">{{ formatMs(case_result.stages.judgment_ms) }}</span>
-                            </div>
-                        </div>
-                        <div class="timeline-item timeline-item--total">
-                            <div class="timeline-dot timeline-dot--total"></div>
-                            <div class="timeline-content">
-                                <span class="timeline-label">总耗时</span>
-                                <span class="timeline-value timeline-value--total">{{ formatMs(case_result.stages.total_ms) }}</span>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </div>
+      <!-- 提交按钮 -->
+      <div class="form-actions">
+        <button @click="submit" class="btn btn-primary">
+          上传并分析
+        </button>
+      </div>
     </div>
+  </div>
+
+  <!-- ========== 结果展示页面 ========== -->
+  <div class="page-container" v-if="Object.keys(case_result).length > 0 && !is_loading">
+    <!-- 顶部栏 -->
+    <div class="result-topbar">
+      <button @click="backToSubmit" class="btn btn-back">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="back-icon">
+          <line x1="19" y1="12" x2="5" y2="12" />
+          <polyline points="12 19 5 12 12 5" />
+        </svg>
+        返回提交
+      </button>
+      <h2 class="result-title">案件分析报告</h2>
+      <div></div>
+    </div>
+
+    <div class="result-content">
+      <!-- 1. 案件基础信息卡片 -->
+      <div class="info-card">
+        <div class="info-card-header">
+          <h3>案件基础信息</h3>
+        </div>
+        <div class="info-card-body">
+          <div class="info-row">
+            <span class="info-label">案件编号</span>
+            <span class="info-value mono">{{ case_result.case_id }}</span>
+          </div>
+          <div class="info-row">
+            <span class="info-label">处理耗时</span>
+            <span class="info-value">{{ formatMs(case_result.elapsed_ms) }}</span>
+          </div>
+          <div class="info-row">
+            <span class="info-label">深度伪造检测</span>
+            <span class="info-value">
+              <span :class="case_result.deepfake_detected ? 'badge badge-danger' : 'badge badge-success'">
+                {{ case_result.deepfake_detected ? '已检测到深伪' : '未检测到深伪' }}
+              </span>
+            </span>
+          </div>
+        </div>
+      </div>
+
+      <!-- 2. 安全预警卡片 -->
+      <div class="info-card" v-if="case_result.alerts && case_result.alerts.length > 0">
+        <div class="info-card-header info-card-header--warning">
+          <h3>安全预警</h3>
+          <span class="card-count">{{ case_result.alerts.length }} 条预警</span>
+        </div>
+        <div class="info-card-body">
+          <div v-for="(alert, index) in case_result.alerts" :key="index" class="alert-item"
+            :class="getAlertLevelClass(alert.level)">
+            <div class="alert-item-header">
+              <span class="alert-title">{{ alert.title }}</span>
+              <span class="alert-level-tag" :class="getAlertLevelClass(alert.level)">
+                {{ alert.level === 'high' ? '高危' : alert.level === 'medium' ? '中危' : '低危' }}
+              </span>
+            </div>
+            <p class="alert-reason">{{ alert.reason }}</p>
+            <p class="alert-warning">{{ alert.warning }}</p>
+          </div>
+        </div>
+      </div>
+
+      <!-- 3. 智能研判卡片 -->
+      <div class="info-card" v-if="case_result.judgment">
+        <div class="info-card-header info-card-header--primary">
+          <h3>智能研判分析</h3>
+        </div>
+        <div class="info-card-body">
+          <div class="judgment-verdict" :class="case_result.judgment.is_fraud ? 'verdict-fraud' : 'verdict-safe'">
+            <span class="verdict-text">
+              {{ case_result.judgment.is_fraud ? '涉嫌诈骗' : '暂未发现诈骗' }}
+            </span>
+            <span class="verdict-confidence">
+              置信度 {{ case_result.judgment.confidence_score }}
+            </span>
+          </div>
+
+          <div class="info-row">
+            <span class="info-label">诈骗类型</span>
+            <span class="info-value">{{ case_result.judgment.fraud_type || '未识别' }}</span>
+          </div>
+          <div class="info-row">
+            <span class="info-label">研判可信度</span>
+            <span class="info-value">{{ case_result.judgment.confidence }}</span>
+          </div>
+          <div class="info-row">
+            <span class="info-label">分析理由</span>
+            <span class="info-value">{{ case_result.judgment.reason }}</span>
+          </div>
+
+          <div class="warning-block" v-if="case_result.judgment.warning">
+            <span class="warning-block-label">防骗提醒</span>
+            <p>{{ case_result.judgment.warning }}</p>
+          </div>
+
+          <!-- 相似案例 -->
+          <div class="sub-section"
+            v-if="case_result.judgment.similar_cases && case_result.judgment.similar_cases.length > 0">
+            <h4 class="sub-section-title">相似历史案例参考</h4>
+            <div class="similar-cases-grid">
+              <div v-for="(caseItem, idx) in case_result.judgment.similar_cases" :key="idx" class="similar-case-card">
+                <div class="similar-case-top">
+                  <span class="similar-case-type">{{ caseItem.fraud_type }}</span>
+                  <span class="similar-case-score">匹配度 {{ caseItem.score }}</span>
+                </div>
+                <p class="similar-case-content">{{ caseItem.content }}</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 4. 处理耗时卡片 -->
+      <div class="info-card" v-if="case_result.stages">
+        <div class="info-card-header">
+          <h3>处理耗时明细</h3>
+        </div>
+        <div class="info-card-body">
+          <div class="timeline">
+            <div class="timeline-item">
+              <div class="timeline-dot"></div>
+              <div class="timeline-content">
+                <span class="timeline-label">多模态分析</span>
+                <span class="timeline-value">{{ formatMs(case_result.stages.multimodal_ms) }}</span>
+              </div>
+            </div>
+            <div class="timeline-item">
+              <div class="timeline-dot"></div>
+              <div class="timeline-content">
+                <span class="timeline-label">特征提取</span>
+                <span class="timeline-value">{{ formatMs(case_result.stages.extraction_ms) }}</span>
+              </div>
+            </div>
+            <div class="timeline-item">
+              <div class="timeline-dot"></div>
+              <div class="timeline-content">
+                <span class="timeline-label">数据存储</span>
+                <span class="timeline-value">{{ formatMs(case_result.stages.storage_ms) }}</span>
+              </div>
+            </div>
+            <div class="timeline-item">
+              <div class="timeline-dot"></div>
+              <div class="timeline-content">
+                <span class="timeline-label">智能研判</span>
+                <span class="timeline-value">{{ formatMs(case_result.stages.judgment_ms) }}</span>
+              </div>
+            </div>
+            <div class="timeline-item timeline-item--total">
+              <div class="timeline-dot timeline-dot--total"></div>
+              <div class="timeline-content">
+                <span class="timeline-label">总耗时</span>
+                <span class="timeline-value timeline-value--total">{{ formatMs(case_result.stages.total_ms) }}</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
 </template>
 
 <style scoped>
@@ -807,7 +812,9 @@ export default {
 }
 
 @keyframes spin {
-  to { transform: rotate(360deg); }
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .loading-text {
