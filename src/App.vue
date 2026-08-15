@@ -46,11 +46,17 @@
       <router-view></router-view>
     </main>
   </div>
+  <NotifyPanel />
 </template>
 
 <script>
+import NotifyPanel from '@/components/NotifyPanel.vue'
+
 export default {
-  name: 'App'
+  name: 'App',
+  components: {
+    NotifyPanel,
+  },
 }
 </script>
 

@@ -1,73 +1,31 @@
 <script lang="ts">
-// 定义从后端返回的完整数据结构
-interface SimilarCase {
-  content: string;
-  fraud_type: string;
-  score: number;
-}
-
-interface Judgment {
-  case_id: string;
-  is_fraud: boolean;
-  fraud_type: string;
-  confidence: string;
-  confidence_score: number;
-  reason: string;
-  warning: string;
-  deepfake_alert: boolean;
-  similar_cases: SimilarCase[];
-  timestamp: string;
-  error: null | string;
-}
-
-interface Alert {
+interface InputItem {
   type: string;
-  level: string;
-  title: string;
-  message: string;
-  warning: string;
-  reason: string;
+  content: string;
+  timestamp: string;
+  file_name: string;
+  file_path: string;
 }
-
-interface Stages {
-  multimodal_ms: number;
-  extraction_ms: number;
-  storage_ms: number;
-  judgment_ms: number;
-  total_ms: number;
-}
-
-interface ApiResponse {
-  case_id: string;
-  judgment: Judgment;
-  alerts: Alert[];
-  deepfake_detected: boolean;
-  elapsed_ms: number;
-  stages: Stages;
-}
-// 定义从后端返回的完整数据结构
+// 定义输入数据结构
 
 
 import { Base64 } from 'js-base64';
-import { ref } from 'vue'
 import axios from 'axios';
+import { pushNotify, updateNotify } from '../notify';
+import { displayCaseName } from '../utils/format';
 
 export default {
   data() {
     return {
-      file_Info: null,
-      base64Data: '' as string,
       case_id: '' as string,
       temp_text: '' as string,
-      selectedFile: [] as Array<{ type: string; content: string; timestamp: string; file_name: string; file_path: string }>,
-      case_result: {} as any,
-      is_loading: false as boolean,
+      inputs: [] as InputItem[],
     }
   },
 
   methods: {
     handleBeforeUnload(event: Event) {
-      if (this.selectedFile.length > 0 || this.temp_text.length > 0 || this.case_id.length > 0) {
+      if (this.case_id.trim() !== '' || this.temp_text.trim() !== '' || this.inputs.length > 0) {
         event.preventDefault();
       }
     },
@@ -128,9 +86,7 @@ export default {
         const fileType = rawType.split('/')[0] || 'text'
         reader.onload = (event) => {
           const content = event.target?.result as string
-          const timestamp = '' as string
-
-          this.selectedFile.push({
+          this.inputs.push({
             type: fileType,
             content: content,
             timestamp: '',
@@ -150,7 +106,7 @@ export default {
         alert('请输入文本内容')
         return
       }
-      this.selectedFile.push({
+      this.inputs.push({
         type: 'text',
         content: this.temp_text,
         timestamp: '',
@@ -160,18 +116,37 @@ export default {
       this.temp_text = ''
     },
     deleteSubmitItem(index: number) {
-      this.selectedFile.splice(index, 1)
+      this.inputs.splice(index, 1)
     },
-    // 返回提交页面
-    backToSubmit() {
-      this.case_result = {}
+    // 格式化后端错误信息
+    formatError(err: any): string {
+      if (err.code === 'ERR_NETWORK' || !err.response) {
+        return '请求失败，请检查后端服务是否启动'
+      }
+      const status = err.response.status
+      const detail = err.response.data?.detail
+      if (status === 400) {
+        if (Array.isArray(detail)) {
+          return '请求参数错误：\n' + detail.map(d => `${d.loc.join('.')}: ${d.msg}`).join('\n')
+        }
+        return `请求参数错误：${detail || '请检查输入数据格式'}`
+      }
+      if (status === 500) {
+        return `服务器内部错误：${detail || '未知异常'}`
+      }
+      return `请求失败（${status}）：${detail || '未知错误'}`
     },
-    async submit() {
-      if (this.case_id === '') {
+    // 格式化毫秒为可读时间
+    formatMs(ms: number): string {
+      if (ms < 1000) return ms + 'ms'
+      return (ms / 1000).toFixed(2) + 's'
+    },
+    submit() {
+      if (this.case_id.trim() === '') {
         alert('请填写案件名称!')
         return
       }
-      if (this.selectedFile.length === 0) {
+      if (this.inputs.length === 0) {
         alert('请至少提交一条信息!')
         return
       }
@@ -181,64 +156,50 @@ export default {
       }
 
       const payload = {
-        case_id: this.case_id,
-        inputs: this.selectedFile,
+        case_id: this.case_id.trim(),
+        inputs: this.inputs,
       }
+      // 所有加载/结果信息交给侧边栏，卡片立即清空，可马上继续提交
+      const runningNotify = pushNotify({
+        type: 'info',
+        title: '分析中',
+        message: `案件：${payload.case_id}\n正在提交多模态数据并进行分析研判，请稍候...`,
+      })
+      this.case_id = ''
+      this.temp_text = ''
+      this.inputs = []
 
-      this.is_loading = true
-      try {
-        const res = await axios.post('/api/v1/pipeline', payload)
-        this.case_result = res.data
-      } catch (err: any) {
-        console.error('请求失败:', err)
-
-        // 1. 如果连不上后端（网络断开或服务没启）
-        if (err.code === 'ERR_NETWORK' || !err.response) {
-          alert('请求失败，请检查后端服务是否启动')
-          return
-        }
-
-        // 2. 如果后端返回了错误状态码（400、500等）
-        const status = err.response.status
-        const detail = err.response.data?.detail
-
-        if (status === 400) {
-          // 参数校验失败，把后端的详细错误信息展示出来
-          if (Array.isArray(detail)) {
-            const msg = detail.map(d => `${d.loc.join('.')}: ${d.msg}`).join('\n')
-            alert(`请求参数错误：\n${msg}`)
-          } else {
-            alert(`请求参数错误：${detail || '请检查输入数据格式'}`)
-          }
-        } else if (status === 500) {
-          alert(`服务器内部错误：${detail || '未知异常'}`)
-        } else {
-          alert(`请求失败（${status}）：${detail || '未知错误'}`)
-        }
-      } finally {
-        this.is_loading = false
-      }
+      // 后台异步分析，不阻塞卡片，可同时提交多个案件
+      axios.post('/api/v1/pipeline', payload)
+        .then((res) => {
+          const r = res.data
+          const verdict = r.judgment && r.judgment.is_fraud ? '涉嫌诈骗' : '暂未发现诈骗'
+          const confidence = r.judgment && r.judgment.confidence_score != null
+            ? `置信度 ${r.judgment.confidence_score}`
+            : ''
+          const deepfake = r.deepfake_detected ? '⚠ 已检测到深伪' : ''
+          const message = [
+            `案件：${displayCaseName(r.case_id)}`,
+            `${verdict}${confidence ? ` · ${confidence}` : ''}`,
+            deepfake,
+            `耗时：${this.formatMs(r.elapsed_ms || 0)}`,
+          ].filter(Boolean).join('\n')
+          updateNotify(runningNotify.id, {
+            type: 'success',
+            title: '分析完成',
+            message,
+            caseId: r.case_id,
+          })
+        })
+        .catch((err: any) => {
+          console.error('请求失败:', err)
+          updateNotify(runningNotify.id, {
+            type: 'error',
+            title: '分析失败',
+            message: this.formatError(err),
+          })
+        })
     },
-    // 格式化毫秒为可读时间
-    formatMs(ms: number): string {
-      if (ms < 1000) return ms + 'ms'
-      return (ms / 1000).toFixed(2) + 's'
-    },
-    // 获取置信度对应的颜色
-    getConfidenceColor(score: number): string {
-      if (score >= 0.8) return '#ef4444'
-      if (score >= 0.6) return '#f59e0b'
-      return '#10b981'
-    },
-    // 获取预警级别对应的样式
-    getAlertLevelClass(level: string): string {
-      const map: Record<string, string> = {
-        'high': 'alert-level--high',
-        'medium': 'alert-level--medium',
-        'low': 'alert-level--low',
-      }
-      return map[level] || 'alert-level--low'
-    }
   },
   mounted() {
     window.addEventListener('beforeunload', this.handleBeforeUnload);
@@ -251,20 +212,11 @@ export default {
 </script>
 
 <template>
-  <!-- ========== 加载状态 ========== -->
-  <div v-if="is_loading" class="loading-overlay">
-    <div class="loading-card">
-      <div class="loading-spinner"></div>
-      <p class="loading-text">正在分析研判中，请稍候...</p>
-      <p class="loading-hint">系统正在对提交的多模态数据进行深度分析</p>
-    </div>
-  </div>
-
   <!-- ========== 提交页面 ========== -->
-  <div class="page-container" v-if="Object.keys(case_result).length === 0 && !is_loading">
+  <div class="page-container">
     <div class="page-header">
       <h1 class="page-title">多模态案件分析</h1>
-      <p class="page-desc">上传图片、视频、音频或文本材料，系统将自动进行深度伪造检测与诈骗研判</p>
+      <p class="page-desc">上传图片、视频、音频或文本材料，系统将自动进行深度伪造检测与诈骗研判；提交完成后可直接继续录入下一案件</p>
     </div>
 
     <div class="form-card">
@@ -274,7 +226,8 @@ export default {
           案件名称
           <span class="required-mark">*</span>
         </label>
-        <input type="text" v-model="case_id" class="form-input" placeholder="请输入案件编号或名称，例如：ZA-2024-001" />
+        <input type="text" v-model="case_id" class="form-input"
+          placeholder="请输入案件编号或名称，例如：ZA-2024-001" />
         <p class="form-hint error" v-if="case_id !== '' && !isValidCaseId(case_id)">
           案件名称包含不合法字符，仅支持字母、数字、中文及 -:()[]{}_.
         </p>
@@ -304,21 +257,23 @@ export default {
         <label class="form-label">文本信息录入</label>
         <p class="form-hint">可手动输入或粘贴涉案聊天记录、短信、邮件等文本信息</p>
         <div class="text-input-row">
-          <textarea v-model="temp_text" class="form-textarea" placeholder="请输入涉案文本信息，例如：聊天记录、转账留言、短信内容等..."></textarea>
-          <button @click="submit_text" class="btn btn-secondary" :disabled="temp_text.trim() === ''">
+          <textarea v-model="temp_text" class="form-textarea"
+            placeholder="请输入涉案文本信息，例如：聊天记录、转账留言、短信内容等..."></textarea>
+          <button @click="submit_text" class="btn btn-secondary"
+            :disabled="temp_text.trim() === ''">
             添加文本
           </button>
         </div>
       </div>
 
-      <!-- 已选文件列表 -->
-      <div class="form-section" v-if="selectedFile.length > 0">
+      <!-- 已选材料列表 -->
+      <div class="form-section" v-if="inputs.length > 0">
         <label class="form-label">
           已选材料列表
-          <span class="file-count">(共 {{ selectedFile.length }} 条)</span>
+          <span class="file-count">(共 {{ inputs.length }} 条)</span>
         </label>
         <div class="file-list">
-          <div class="file-item" v-for="(item, index) in selectedFile" :key="index">
+          <div class="file-item" v-for="(item, index) in inputs" :key="index">
             <span class="file-type-badge" :style="{ background: getFileTypeColor(item.type) }">
               {{ getFileTypeLabel(item.type) }}
             </span>
@@ -340,166 +295,6 @@ export default {
         <button @click="submit" class="btn btn-primary">
           上传并分析
         </button>
-      </div>
-    </div>
-  </div>
-
-  <!-- ========== 结果展示页面 ========== -->
-  <div class="page-container" v-if="Object.keys(case_result).length > 0 && !is_loading">
-    <!-- 顶部栏 -->
-    <div class="result-topbar">
-      <button @click="backToSubmit" class="btn btn-back">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="back-icon">
-          <line x1="19" y1="12" x2="5" y2="12" />
-          <polyline points="12 19 5 12 12 5" />
-        </svg>
-        返回提交
-      </button>
-      <h2 class="result-title">案件分析报告</h2>
-      <div></div>
-    </div>
-
-    <div class="result-content">
-      <!-- 1. 案件基础信息卡片 -->
-      <div class="info-card">
-        <div class="info-card-header">
-          <h3>案件基础信息</h3>
-        </div>
-        <div class="info-card-body">
-          <div class="info-row">
-            <span class="info-label">案件编号</span>
-            <span class="info-value mono">{{ case_result.case_id }}</span>
-          </div>
-          <div class="info-row">
-            <span class="info-label">处理耗时</span>
-            <span class="info-value">{{ formatMs(case_result.elapsed_ms) }}</span>
-          </div>
-          <div class="info-row">
-            <span class="info-label">深度伪造检测</span>
-            <span class="info-value">
-              <span :class="case_result.deepfake_detected ? 'badge badge-danger' : 'badge badge-success'">
-                {{ case_result.deepfake_detected ? '已检测到深伪' : '未检测到深伪' }}
-              </span>
-            </span>
-          </div>
-        </div>
-      </div>
-
-      <!-- 2. 安全预警卡片 -->
-      <div class="info-card" v-if="case_result.alerts && case_result.alerts.length > 0">
-        <div class="info-card-header info-card-header--warning">
-          <h3>安全预警</h3>
-          <span class="card-count">{{ case_result.alerts.length }} 条预警</span>
-        </div>
-        <div class="info-card-body">
-          <div v-for="(alert, index) in case_result.alerts" :key="index" class="alert-item"
-            :class="getAlertLevelClass(alert.level)">
-            <div class="alert-item-header">
-              <span class="alert-title">{{ alert.title }}</span>
-              <span class="alert-level-tag" :class="getAlertLevelClass(alert.level)">
-                {{ alert.level === 'high' ? '高危' : alert.level === 'medium' ? '中危' : '低危' }}
-              </span>
-            </div>
-            <p class="alert-reason">{{ alert.reason }}</p>
-            <p class="alert-warning">{{ alert.warning }}</p>
-          </div>
-        </div>
-      </div>
-
-      <!-- 3. 智能研判卡片 -->
-      <div class="info-card" v-if="case_result.judgment">
-        <div class="info-card-header info-card-header--primary">
-          <h3>智能研判分析</h3>
-        </div>
-        <div class="info-card-body">
-          <div class="judgment-verdict" :class="case_result.judgment.is_fraud ? 'verdict-fraud' : 'verdict-safe'">
-            <span class="verdict-text">
-              {{ case_result.judgment.is_fraud ? '涉嫌诈骗' : '暂未发现诈骗' }}
-            </span>
-            <span class="verdict-confidence">
-              置信度 {{ case_result.judgment.confidence_score }}
-            </span>
-          </div>
-
-          <div class="info-row">
-            <span class="info-label">诈骗类型</span>
-            <span class="info-value">{{ case_result.judgment.fraud_type || '未识别' }}</span>
-          </div>
-          <div class="info-row">
-            <span class="info-label">研判可信度</span>
-            <span class="info-value">{{ case_result.judgment.confidence }}</span>
-          </div>
-          <div class="info-row">
-            <span class="info-label">分析理由</span>
-            <span class="info-value">{{ case_result.judgment.reason }}</span>
-          </div>
-
-          <div class="warning-block" v-if="case_result.judgment.warning">
-            <span class="warning-block-label">防骗提醒</span>
-            <p>{{ case_result.judgment.warning }}</p>
-          </div>
-
-          <!-- 相似案例 -->
-          <div class="sub-section"
-            v-if="case_result.judgment.similar_cases && case_result.judgment.similar_cases.length > 0">
-            <h4 class="sub-section-title">相似历史案例参考</h4>
-            <div class="similar-cases-grid">
-              <div v-for="(caseItem, idx) in case_result.judgment.similar_cases" :key="idx" class="similar-case-card">
-                <div class="similar-case-top">
-                  <span class="similar-case-type">{{ caseItem.fraud_type }}</span>
-                  <span class="similar-case-score">匹配度 {{ caseItem.score }}</span>
-                </div>
-                <p class="similar-case-content">{{ caseItem.content }}</p>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <!-- 4. 处理耗时卡片 -->
-      <div class="info-card" v-if="case_result.stages">
-        <div class="info-card-header">
-          <h3>处理耗时明细</h3>
-        </div>
-        <div class="info-card-body">
-          <div class="timeline">
-            <div class="timeline-item">
-              <div class="timeline-dot"></div>
-              <div class="timeline-content">
-                <span class="timeline-label">多模态分析</span>
-                <span class="timeline-value">{{ formatMs(case_result.stages.multimodal_ms) }}</span>
-              </div>
-            </div>
-            <div class="timeline-item">
-              <div class="timeline-dot"></div>
-              <div class="timeline-content">
-                <span class="timeline-label">特征提取</span>
-                <span class="timeline-value">{{ formatMs(case_result.stages.extraction_ms) }}</span>
-              </div>
-            </div>
-            <div class="timeline-item">
-              <div class="timeline-dot"></div>
-              <div class="timeline-content">
-                <span class="timeline-label">数据存储</span>
-                <span class="timeline-value">{{ formatMs(case_result.stages.storage_ms) }}</span>
-              </div>
-            </div>
-            <div class="timeline-item">
-              <div class="timeline-dot"></div>
-              <div class="timeline-content">
-                <span class="timeline-label">智能研判</span>
-                <span class="timeline-value">{{ formatMs(case_result.stages.judgment_ms) }}</span>
-              </div>
-            </div>
-            <div class="timeline-item timeline-item--total">
-              <div class="timeline-dot timeline-dot--total"></div>
-              <div class="timeline-content">
-                <span class="timeline-label">总耗时</span>
-                <span class="timeline-value timeline-value--total">{{ formatMs(case_result.stages.total_ms) }}</span>
-              </div>
-            </div>
-          </div>
-        </div>
       </div>
     </div>
   </div>
@@ -592,6 +387,13 @@ export default {
 
 .form-input::placeholder {
   color: #94a3b8;
+}
+
+.form-input:disabled,
+.form-textarea:disabled {
+  background: #f1f5f9;
+  color: #94a3b8;
+  cursor: not-allowed;
 }
 
 /* ========== 文件上传 ========== */
@@ -728,6 +530,11 @@ export default {
   color: #ef4444;
 }
 
+.btn-delete:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
 /* ========== 按钮 ========== */
 .btn {
   display: inline-flex;
@@ -785,478 +592,6 @@ export default {
   border-top: 1px solid #e2e8f0;
   display: flex;
   justify-content: center;
-}
-
-/* ========== 加载状态 ========== */
-.loading-overlay {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  height: 100%;
-  min-height: 400px;
-}
-
-.loading-card {
-  text-align: center;
-  padding: 48px;
-}
-
-.loading-spinner {
-  width: 48px;
-  height: 48px;
-  border: 4px solid #e2e8f0;
-  border-top-color: #3b82f6;
-  border-radius: 50%;
-  animation: spin 0.8s linear infinite;
-  margin: 0 auto 20px;
-}
-
-@keyframes spin {
-  to {
-    transform: rotate(360deg);
-  }
-}
-
-.loading-text {
-  font-size: 18px;
-  font-weight: 600;
-  color: #1e293b;
-  margin-bottom: 8px;
-}
-
-.loading-hint {
-  font-size: 14px;
-  color: #94a3b8;
-}
-
-/* ========== 结果页面 ========== */
-.result-topbar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 24px;
-  padding-bottom: 16px;
-  border-bottom: 1px solid #e2e8f0;
-}
-
-.btn-back {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 8px 16px;
-  background: #fff;
-  border: 1px solid #d1d5db;
-  border-radius: 8px;
-  color: #475569;
-  font-size: 13px;
-  cursor: pointer;
-  transition: all 0.15s;
-}
-
-.btn-back:hover {
-  background: #f1f5f9;
-  color: #1e293b;
-}
-
-.back-icon {
-  width: 16px;
-  height: 16px;
-}
-
-.result-title {
-  font-size: 20px;
-  font-weight: 700;
-  color: #1a2332;
-}
-
-.result-content {
-  display: flex;
-  flex-direction: column;
-  gap: 20px;
-}
-
-/* ========== 信息卡片 ========== */
-.info-card {
-  background: #ffffff;
-  border-radius: 12px;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06), 0 4px 12px rgba(0, 0, 0, 0.04);
-  overflow: hidden;
-}
-
-.info-card-header {
-  padding: 16px 24px;
-  border-bottom: 1px solid #e2e8f0;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-}
-
-.info-card-header h3 {
-  font-size: 16px;
-  font-weight: 600;
-  color: #1e293b;
-}
-
-.info-card-header--warning {
-  background: #fffbeb;
-  border-bottom-color: #fde68a;
-}
-
-.info-card-header--warning h3 {
-  color: #92400e;
-}
-
-.info-card-header--primary {
-  background: #eff6ff;
-  border-bottom-color: #bfdbfe;
-}
-
-.info-card-header--primary h3 {
-  color: #1e40af;
-}
-
-.card-count {
-  font-size: 13px;
-  color: #92400e;
-  background: #fef3c7;
-  padding: 2px 10px;
-  border-radius: 12px;
-}
-
-.info-card-body {
-  padding: 20px 24px;
-}
-
-/* ========== 信息行 ========== */
-.info-row {
-  display: flex;
-  padding: 10px 0;
-  border-bottom: 1px solid #f1f5f9;
-}
-
-.info-row:last-child {
-  border-bottom: none;
-}
-
-.info-label {
-  width: 120px;
-  flex-shrink: 0;
-  color: #64748b;
-  font-size: 13px;
-  font-weight: 500;
-}
-
-.info-value {
-  flex: 1;
-  color: #1e293b;
-  font-size: 14px;
-}
-
-.info-value.mono {
-  font-family: 'SF Mono', 'Consolas', 'Monaco', monospace;
-  letter-spacing: 0.5px;
-}
-
-/* ========== 徽章 ========== */
-.badge {
-  display: inline-block;
-  padding: 2px 10px;
-  border-radius: 12px;
-  font-size: 12px;
-  font-weight: 600;
-}
-
-.badge-danger {
-  background: #fef2f2;
-  color: #b91c1c;
-}
-
-.badge-success {
-  background: #f0fdf4;
-  color: #15803d;
-}
-
-/* ========== 预警条目 ========== */
-.alert-item {
-  padding: 16px;
-  border-radius: 8px;
-  margin-bottom: 10px;
-  border-left: 4px solid #e2e8f0;
-}
-
-.alert-item:last-child {
-  margin-bottom: 0;
-}
-
-.alert-item.alert-level--high {
-  background: #fef2f2;
-  border-left-color: #ef4444;
-}
-
-.alert-item.alert-level--medium {
-  background: #fffbeb;
-  border-left-color: #f59e0b;
-}
-
-.alert-item.alert-level--low {
-  background: #f8fafc;
-  border-left-color: #3b82f6;
-}
-
-.alert-item-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 8px;
-}
-
-.alert-title {
-  font-weight: 600;
-  font-size: 14px;
-  color: #1e293b;
-}
-
-.alert-level-tag {
-  padding: 2px 8px;
-  border-radius: 4px;
-  font-size: 12px;
-  font-weight: 600;
-}
-
-.alert-level-tag.alert-level--high {
-  background: #fee2e2;
-  color: #991b1b;
-}
-
-.alert-level-tag.alert-level--medium {
-  background: #fef3c7;
-  color: #92400e;
-}
-
-.alert-level-tag.alert-level--low {
-  background: #dbeafe;
-  color: #1e40af;
-}
-
-.alert-reason {
-  font-size: 13px;
-  color: #475569;
-  margin-bottom: 6px;
-  line-height: 1.5;
-}
-
-.alert-warning {
-  font-size: 13px;
-  color: #b91c1c;
-  font-weight: 500;
-  background: #fff5f5;
-  padding: 8px 12px;
-  border-radius: 6px;
-  line-height: 1.5;
-}
-
-/* ========== 研判结果 ========== */
-.judgment-verdict {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 16px 20px;
-  border-radius: 8px;
-  margin-bottom: 20px;
-}
-
-.judgment-verdict.verdict-fraud {
-  background: linear-gradient(135deg, #fef2f2 0%, #fff5f5 100%);
-  border: 1px solid #fecaca;
-}
-
-.judgment-verdict.verdict-safe {
-  background: linear-gradient(135deg, #f0fdf4 0%, #f5faf7 100%);
-  border: 1px solid #bbf7d0;
-}
-
-.verdict-text {
-  font-size: 20px;
-  font-weight: 700;
-}
-
-.verdict-fraud .verdict-text {
-  color: #dc2626;
-}
-
-.verdict-safe .verdict-text {
-  color: #16a34a;
-}
-
-.verdict-confidence {
-  font-size: 14px;
-  color: #64748b;
-  font-weight: 500;
-}
-
-.warning-block {
-  margin-top: 16px;
-  padding: 14px 16px;
-  background: #fffbeb;
-  border: 1px solid #fde68a;
-  border-radius: 8px;
-}
-
-.warning-block-label {
-  display: inline-block;
-  font-size: 12px;
-  font-weight: 700;
-  color: #92400e;
-  background: #fef3c7;
-  padding: 2px 8px;
-  border-radius: 4px;
-  margin-bottom: 8px;
-}
-
-.warning-block p {
-  font-size: 14px;
-  color: #78350f;
-  line-height: 1.6;
-}
-
-/* ========== 子区块 ========== */
-.sub-section {
-  margin-top: 24px;
-  padding-top: 20px;
-  border-top: 1px solid #e2e8f0;
-}
-
-.sub-section-title {
-  font-size: 15px;
-  font-weight: 600;
-  color: #1e293b;
-  margin-bottom: 14px;
-}
-
-.similar-cases-grid {
-  display: grid;
-  grid-template-columns: 1fr;
-  gap: 10px;
-}
-
-.similar-case-card {
-  padding: 14px 16px;
-  background: #f8fafc;
-  border: 1px solid #e2e8f0;
-  border-radius: 8px;
-  transition: border-color 0.15s;
-}
-
-.similar-case-card:hover {
-  border-color: #3b82f6;
-}
-
-.similar-case-top {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 8px;
-}
-
-.similar-case-type {
-  font-weight: 600;
-  font-size: 13px;
-  color: #3b82f6;
-  background: #eff6ff;
-  padding: 2px 10px;
-  border-radius: 4px;
-}
-
-.similar-case-score {
-  font-size: 12px;
-  color: #64748b;
-}
-
-.similar-case-content {
-  font-size: 13px;
-  color: #475569;
-  line-height: 1.6;
-}
-
-/* ========== 时间线 ========== */
-.timeline {
-  position: relative;
-}
-
-.timeline-item {
-  display: flex;
-  align-items: center;
-  gap: 14px;
-  padding: 10px 0;
-  position: relative;
-}
-
-.timeline-item::before {
-  content: '';
-  position: absolute;
-  left: 5px;
-  top: 0;
-  bottom: 0;
-  width: 2px;
-  background: #e2e8f0;
-}
-
-.timeline-item:first-child::before {
-  top: 50%;
-}
-
-.timeline-item:last-child::before {
-  bottom: 50%;
-}
-
-.timeline-item--total {
-  padding-top: 16px;
-  margin-top: 4px;
-}
-
-.timeline-item--total::before {
-  background: transparent;
-}
-
-.timeline-dot {
-  width: 12px;
-  height: 12px;
-  border-radius: 50%;
-  background: #cbd5e1;
-  border: 2px solid #fff;
-  box-shadow: 0 0 0 2px #cbd5e1;
-  flex-shrink: 0;
-  z-index: 1;
-}
-
-.timeline-dot--total {
-  background: #3b82f6;
-  box-shadow: 0 0 0 2px #3b82f6;
-  width: 14px;
-  height: 14px;
-}
-
-.timeline-content {
-  display: flex;
-  justify-content: space-between;
-  flex: 1;
-}
-
-.timeline-label {
-  font-size: 14px;
-  color: #475569;
-}
-
-.timeline-value {
-  font-size: 14px;
-  color: #64748b;
-  font-family: 'SF Mono', 'Consolas', 'Monaco', monospace;
-}
-
-.timeline-value--total {
-  font-weight: 700;
-  color: #1d4ed8;
-  font-size: 15px;
 }
 
 /* ========== 响应式 ========== */
