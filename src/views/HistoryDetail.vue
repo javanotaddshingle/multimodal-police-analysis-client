@@ -58,6 +58,16 @@
                 </div>
             </div>
 
+            <!-- 1.5 事件关系图谱卡片 -->
+            <div class="info-card" v-if="detail.graph && detail.graph.nodes && detail.graph.nodes.length > 0">
+                <div class="info-card-header">
+                    <h3>事件关系图谱</h3>
+                </div>
+                <div class="info-card-body">
+                    <KnowledgeGraph :graph="detail.graph" :victim="detail.victim" :suspect="detail.suspect" />
+                </div>
+            </div>
+
             <!-- 2. 智能研判卡片 -->
             <div class="info-card" v-if="detail.judgment">
                 <div class="info-card-header info-card-header--primary">
@@ -128,6 +138,7 @@ import { onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import axios from 'axios'
 import { displayCaseName } from '../utils/format'
+import KnowledgeGraph from '../components/KnowledgeGraph.vue'
 
 const props = defineProps<{
     caseId: string

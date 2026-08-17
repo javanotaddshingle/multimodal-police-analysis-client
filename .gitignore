@@ -43,3 +43,5 @@ __screenshots__/
 
 # log
 /session_log.txt
+# E2E 可视化测试脚本
+/e2e-*.cjs

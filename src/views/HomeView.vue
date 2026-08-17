@@ -159,11 +159,22 @@ export default {
         case_id: this.case_id.trim(),
         inputs: this.inputs,
       }
+      // 材料统计：多文件将按顺序分析，全部完成后统一出结果
+      const typeNames: Record<string, string> = { image: '图片', video: '视频', audio: '音频', text: '文本' }
+      const countByType = payload.inputs.reduce((acc: Record<string, number>, it) => {
+        const key = typeNames[it.type] || it.type
+        acc[key] = (acc[key] || 0) + 1
+        return acc
+      }, {})
+      const materialSummary = Object.entries(countByType)
+        .map(([k, v]) => `${k} ${v} 项`)
+        .join('、')
+
       // 所有加载/结果信息交给侧边栏，卡片立即清空，可马上继续提交
       const runningNotify = pushNotify({
         type: 'info',
         title: '分析中',
-        message: `案件：${payload.case_id}\n正在提交多模态数据并进行分析研判，请稍候...`,
+        message: `案件：${payload.case_id}\n共 ${payload.inputs.length} 项材料（${materialSummary}），将顺序分析，全部完成后统一出结果，请稍候...`,
       })
       this.case_id = ''
       this.temp_text = ''
@@ -182,6 +193,7 @@ export default {
             `案件：${displayCaseName(r.case_id)}`,
             `${verdict}${confidence ? ` · ${confidence}` : ''}`,
             deepfake,
+            `材料：${materialSummary}`,
             `耗时：${this.formatMs(r.elapsed_ms || 0)}`,
           ].filter(Boolean).join('\n')
           updateNotify(runningNotify.id, {
@@ -239,7 +251,7 @@ export default {
           上传证据材料
           <span class="required-mark">*</span>
         </label>
-        <p class="form-hint">支持图片、视频、音频及 .txt 文本文件，可多选</p>
+        <p class="form-hint">支持图片、视频、音频及 .txt 文本文件，可一次多选；多文件将按顺序分析，全部完成后统一出结果</p>
         <label class="upload-trigger" for="file-upload">
           <svg class="upload-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
@@ -293,7 +305,7 @@ export default {
       <!-- 提交按钮 -->
       <div class="form-actions">
         <button @click="submit" class="btn btn-primary">
-          上传并分析
+          上传并分析{{ inputs.length > 0 ? '（' + inputs.length + ' 项）' : '' }}
         </button>
       </div>
     </div>
