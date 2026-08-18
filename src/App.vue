@@ -64,7 +64,7 @@ export default {
 .app-layout {
   display: flex;
   height: 100vh;
-  width: 100vw;
+  width: 100%;
   overflow: hidden;
   background: #f0f2f5;
 }
@@ -228,5 +228,38 @@ export default {
 
 .main-content::-webkit-scrollbar-thumb:hover {
   background: #a0aab4;
+}
+
+/* ========== 响应式：窄屏侧边栏收缩为图标栏 ========== */
+@media (max-width: 860px) {
+  .sidebar {
+    width: 64px;
+    min-width: 64px;
+  }
+
+  .sidebar-header {
+    padding: 20px 12px 16px;
+    justify-content: center;
+  }
+
+  .logo-text,
+  .nav-label,
+  .footer-info {
+    display: none;
+  }
+
+  .nav-menu {
+    align-items: center;
+  }
+
+  .nav-item {
+    justify-content: center;
+    padding: 12px;
+  }
+
+  .sidebar-footer {
+    padding: 12px;
+    justify-content: center;
+  }
 }
 </style>

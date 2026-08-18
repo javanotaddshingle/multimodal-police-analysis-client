@@ -278,10 +278,15 @@ function clampK(v: number) {
 
 function toWorld(clientX: number, clientY: number) {
   const rect = canvasEl.value?.getBoundingClientRect()
-  if (!rect) return { x: 0, y: 0 }
+  if (!rect || rect.width === 0) return { x: 0, y: 0 }
+  // 元素像素 -> viewBox 像素（画布宽度随窗口变化，不能按 1:1 处理）
+  const sx = rect.width / W
+  const sy = rect.height / H
+  const vx = (clientX - rect.left) / sx
+  const vy = (clientY - rect.top) / sy
   return {
-    x: (clientX - rect.left - tx.value) / k.value,
-    y: (clientY - rect.top - ty.value) / k.value,
+    x: (vx - tx.value) / k.value,
+    y: (vy - ty.value) / k.value,
   }
 }
 
@@ -317,13 +322,16 @@ function resetView() {
 
 function onWheel(ev: WheelEvent) {
   const rect = canvasEl.value?.getBoundingClientRect()
-  if (!rect) return
-  const mx = ev.clientX - rect.left
-  const my = ev.clientY - rect.top
+  if (!rect || rect.width === 0) return
+  // 元素像素 -> viewBox 像素（画布宽度随窗口变化，不能按 1:1 处理）
+  const sx = rect.width / W
+  const sy = rect.height / H
+  const vx = (ev.clientX - rect.left) / sx
+  const vy = (ev.clientY - rect.top) / sy
   const factor = ev.deltaY < 0 ? 1.15 : 1 / 1.15
   const k2 = clampK(k.value * factor)
-  tx.value = mx - (mx - tx.value) * (k2 / k.value)
-  ty.value = my - (my - ty.value) * (k2 / k.value)
+  tx.value = vx - (vx - tx.value) * (k2 / k.value)
+  ty.value = vy - (vy - ty.value) * (k2 / k.value)
   k.value = k2
 }
 
@@ -443,15 +451,30 @@ function onWindowUp() {
   onBgUp()
 }
 
+let resizeRaf = 0
+function onCanvasResize() {
+  if (resizeRaf) return
+  resizeRaf = requestAnimationFrame(() => {
+    resizeRaf = 0
+    fitView()
+  })
+}
+let resizeObserver: ResizeObserver | null = null
+
 onMounted(() => {
   rafId = requestAnimationFrame(loop)
   window.addEventListener('pointerup', onWindowUp)
   window.addEventListener('pointercancel', onWindowUp)
+  if (canvasEl.value && typeof ResizeObserver !== 'undefined') {
+    resizeObserver = new ResizeObserver(onCanvasResize)
+    resizeObserver.observe(canvasEl.value)
+  }
 })
 onUnmounted(() => {
   cancelAnimationFrame(rafId)
   window.removeEventListener('pointerup', onWindowUp)
   window.removeEventListener('pointercancel', onWindowUp)
+  resizeObserver?.disconnect()
   if (fitTimer) window.clearTimeout(fitTimer)
 })
 </script>

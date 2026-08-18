@@ -11,8 +11,10 @@ interface InputItem {
 
 import { Base64 } from 'js-base64';
 import axios from 'axios';
-import { pushNotify, updateNotify } from '../notify';
+import { ensureAnalyzingPoller, pushNotify, updateNotify } from '../notify';
 import { displayCaseName } from '../utils/format';
+
+const DRAFT_KEY = 'mpia_form_draft'
 
 export default {
   data() {
@@ -20,10 +22,44 @@ export default {
       case_id: '' as string,
       temp_text: '' as string,
       inputs: [] as InputItem[],
+      readingFile: false,
     }
   },
 
+  watch: {
+    case_id() { this.saveDraft() },
+    temp_text() { this.saveDraft() },
+    inputs: { handler() { this.saveDraft() }, deep: true },
+  },
+
   methods: {
+    saveDraft() {
+      try {
+        localStorage.setItem(DRAFT_KEY, JSON.stringify({
+          case_id: this.case_id,
+          temp_text: this.temp_text,
+          inputs: this.inputs,
+        }))
+      } catch {
+        /* 草稿过大（如大文件 base64）超出配额时静默跳过 */
+      }
+    },
+    restoreDraft() {
+      try {
+        const raw = localStorage.getItem(DRAFT_KEY)
+        if (!raw) return
+        const d = JSON.parse(raw)
+        if (!d || !Array.isArray(d.inputs)) return
+        this.case_id = d.case_id || ''
+        this.temp_text = d.temp_text || ''
+        this.inputs = d.inputs
+      } catch {
+        /* 数据损坏时忽略 */
+      }
+    },
+    clearDraft() {
+      try { localStorage.removeItem(DRAFT_KEY) } catch { /* ignore */ }
+    },
     handleBeforeUnload(event: Event) {
       if (this.case_id.trim() !== '' || this.temp_text.trim() !== '' || this.inputs.length > 0) {
         event.preventDefault();
@@ -72,20 +108,63 @@ export default {
       return Base64.decode(ms)
     },
 
-    handleFileChange(event: Event) {
+    // 读取文件分块为 base64（大文件逐块读取，避免一次性编码冻结页面）
+    _readChunkBase64(slice: Blob): Promise<string> {
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader()
+        reader.onload = () => {
+          const bytes = new Uint8Array(reader.result as ArrayBuffer)
+          let bin = ''
+          for (let i = 0; i < bytes.length; i += 0x8000) {
+            bin += String.fromCharCode.apply(null, Array.from(bytes.subarray(i, i + 0x8000)))
+          }
+          resolve(btoa(bin))
+        }
+        reader.onerror = () => reject(new Error('文件读取失败'))
+        reader.readAsArrayBuffer(slice)
+      })
+    },
+    async readFileAsDataURL(file: File): Promise<string> {
+      const mime = file.type || 'application/octet-stream'
+      // 小文件直接读，开销可忽略
+      if (file.size <= 30 * 1024 * 1024) {
+        return await new Promise((resolve, reject) => {
+          const reader = new FileReader()
+          reader.onload = () => resolve(reader.result as string)
+          reader.onerror = () => reject(new Error('文件读取失败: ' + file.name))
+          reader.readAsDataURL(file)
+        })
+      }
+      // 大文件（>30MB）：6MB 分块读取编码，块间让出主线程，页面保持可响应。
+      // 注意：块大小必须是 3 的倍数——base64 按 3 字节一组编码，块长不是 3 的倍数
+      // 会导致分块拼接后字节错位、文件损坏（此前 8MB 块导致大视频上传后无法解码）
+      const CHUNK = 6 * 1024 * 1024
+      let out = 'data:' + mime + ';base64,'
+      for (let offset = 0; offset < file.size; offset += CHUNK) {
+        out += await this._readChunkBase64(file.slice(offset, Math.min(offset + CHUNK, file.size)))
+        await new Promise(r => setTimeout(r, 0))
+      }
+      return out
+    },
+
+    async handleFileChange(event: Event) {
       const input = event.target as HTMLInputElement
       const files = input.files
       if (!files || files.length == 0) return
 
-      for (var i = 0; i < files.length; i++) {
-        const file = files[i]
-        const reader = new FileReader()
-        if (!file) continue
-        const rawType = file.type || 'application/octet-stream'
-        // 后端只接受 image / video / audio / text，从 MIME 中提取主类别
-        const fileType = rawType.split('/')[0] || 'text'
-        reader.onload = (event) => {
-          const content = event.target?.result as string
+      this.readingFile = true
+      try {
+        for (var i = 0; i < files.length; i++) {
+          const file = files[i]
+          if (!file) continue
+          if (file.size > 200 * 1024 * 1024) {
+            alert(`文件过大：${file.name}（${(file.size / 1024 / 1024).toFixed(0)}MB），请上传小于 200MB 的文件`)
+            continue
+          }
+          const rawType = file.type || 'application/octet-stream'
+          // 后端只接受 image / video / audio / text，从 MIME 中提取主类别
+          const fileType = rawType.split('/')[0] || 'text'
+          const content = await this.readFileAsDataURL(file)
           this.inputs.push({
             type: fileType,
             content: content,
@@ -93,13 +172,14 @@ export default {
             file_name: file.name || '',
             file_path: '',
           })
-          console.log(fileType)
-          console.log(content.substring(0, 50))
         }
-        reader.readAsDataURL(file)
+      } catch (e: any) {
+        alert('文件读取失败：' + (e.message || '未知错误'))
+      } finally {
+        this.readingFile = false
+        // 重置 input 以允许重复选择同一文件
+        input.value = ''
       }
-      // 重置 input 以允许重复选择同一文件
-      input.value = ''
     },
     submit_text() {
       if (this.temp_text.trim() === '') {
@@ -171,18 +251,41 @@ export default {
         .join('、')
 
       // 所有加载/结果信息交给侧边栏，卡片立即清空，可马上继续提交
+      const hasVideo = payload.inputs.some((it: any) => it.type === 'video')
       const runningNotify = pushNotify({
         type: 'info',
         title: '分析中',
-        message: `案件：${payload.case_id}\n共 ${payload.inputs.length} 项材料（${materialSummary}），将顺序分析，全部完成后统一出结果，请稍候...`,
+        message: `案件：${payload.case_id}\n共 ${payload.inputs.length} 项材料（${materialSummary}），将顺序分析，全部完成后统一出结果，请稍候...${hasVideo ? '\n（检测到视频，将自动压缩后分析，请耐心等待）' : ''}`,
+        analyzing: true,
+        submissionName: payload.case_id,
       })
+      // 进度提示：每 5 秒刷新已等待时长，避免看起来像卡死；
+      // 案件完成（无论响应是否送达，由轮询对账收敛）后自动停止
+      const startedAt = Date.now()
+      const ticker = window.setInterval(() => {
+        if (!runningNotify.analyzing) {
+          window.clearInterval(ticker)
+          return
+        }
+        const secs = Math.round((Date.now() - startedAt) / 1000)
+        const tip = secs < 120
+          ? '分析中，请耐心等待（视频分析通常需要 1-3 分钟）'
+          : '分析仍在进行，请继续等待'
+        updateNotify(runningNotify.id, {
+          message: `案件：${payload.case_id}\n共 ${payload.inputs.length} 项材料，顺序分析中...\n已等待 ${secs} 秒，${tip}`,
+        })
+      }, 5000)
+      // 在途案件对账轮询兜底：即使响应丢失，案件入库带研判结果后也会标记完成
+      ensureAnalyzingPoller()
       this.case_id = ''
       this.temp_text = ''
       this.inputs = []
+      this.clearDraft()
 
       // 后台异步分析，不阻塞卡片，可同时提交多个案件
       axios.post('/api/v1/pipeline', payload)
         .then((res) => {
+          window.clearInterval(ticker)
           const r = res.data
           const verdict = r.judgment && r.judgment.is_fraud ? '涉嫌诈骗' : '暂未发现诈骗'
           const confidence = r.judgment && r.judgment.confidence_score != null
@@ -201,20 +304,26 @@ export default {
             title: '分析完成',
             message,
             caseId: r.case_id,
+            analyzing: false,
           })
         })
         .catch((err: any) => {
           console.error('请求失败:', err)
+          window.clearInterval(ticker)
           updateNotify(runningNotify.id, {
             type: 'error',
             title: '分析失败',
             message: this.formatError(err),
+            analyzing: false,
           })
         })
     },
   },
   mounted() {
     window.addEventListener('beforeunload', this.handleBeforeUnload);
+    // 页面刷新后：恢复未提交的表单草稿（在途分析结果由 notify.ts 全局轮询对账）
+    this.restoreDraft()
+    ensureAnalyzingPoller()
   },
   beforeUnmount() {
     window.removeEventListener('beforeunload', this.handleBeforeUnload);
@@ -262,6 +371,7 @@ export default {
         </label>
         <input id="file-upload" type="file" accept="image/*,video/*,audio/*,.txt" @change="handleFileChange"
           class="file-input-hidden" multiple />
+        <p v-if="readingFile" class="form-hint reading-tip">正在读取文件，大文件可能需要几秒，请稍候...</p>
       </div>
 
       <!-- 文本输入 -->
@@ -375,6 +485,17 @@ export default {
 
 .form-hint.error {
   color: #ef4444;
+}
+
+.reading-tip {
+  color: #1d4ed8;
+  font-weight: 500;
+  animation: readingPulse 1.2s ease-in-out infinite;
+}
+
+@keyframes readingPulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.45; }
 }
 
 /* ========== 输入框 ========== */
