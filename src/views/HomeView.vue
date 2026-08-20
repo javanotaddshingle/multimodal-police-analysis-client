@@ -147,6 +147,28 @@ export default {
       return out
     },
 
+    // 暂时硬编码公网服务地址
+    async uploadVideo(file: File): Promise<string> {
+      const baseUrl = 'http://8.156.85.152:8000'
+      const formData = new FormData()
+      formData.append('file', file)
+
+      const response = await fetch(`${baseUrl}/api/v1/upload/video`, {
+        method: 'POST',
+        body: formData,
+      })
+
+      if(!response.ok) {
+        throw new Error(`上传失败, HTTP ${response.status}`)
+      }
+      
+      const result = await response.json()
+      if(!result.success || !result.videoUrl) {
+        throw new Error('上传失败，服务器返回格式不正确')
+      }
+      return result.videoUrl
+    },
+
     async handleFileChange(event: Event) {
       const input = event.target as HTMLInputElement
       const files = input.files
@@ -164,7 +186,30 @@ export default {
           const rawType = file.type || 'application/octet-stream'
           // 后端只接受 image / video / audio / text，从 MIME 中提取主类别
           const fileType = rawType.split('/')[0] || 'text'
-          const content = await this.readFileAsDataURL(file)
+
+
+          let content: string
+          if (fileType === 'video') {
+            // 视频文件传到公网服务器获取URL
+            try {
+              content = await this.uploadVideo(file)
+            } catch (e: any) {
+              alert(`视频上传失败: ${file.name}, ${e.message || '其他错误'}`)
+              continue
+            }
+          } else if (fileType === 'text') {
+            // 如果是文本文件， 则直接使用原文而不进行编码
+            content = await file.text()
+          } else {
+            // 其他文件保持原来不变
+            // content用base64编码后传给后端
+            content = await this.readFileAsDataURL(file)
+          }
+          // 测试
+          console.log('================')
+          console.log(content)
+          console.log('================')
+
           this.inputs.push({
             type: fileType,
             content: content,
